@@ -21,5 +21,7 @@ typedef struct ARGUMENTS {
 // Function to parse arguments and store it into declared structure "Arguments"
 Arguments *arguments_parsing(int argc, char **argv);
 
+// Help function with usage and detailed explanation of each paramater
+void help();
 
 #endif
