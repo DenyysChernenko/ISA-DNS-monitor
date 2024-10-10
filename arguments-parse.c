@@ -76,7 +76,6 @@ Arguments *arguments_parsing(int argc, char *argv[]) {
         free(args);
         return NULL;
     }
-
-
+    
     return args;
 }

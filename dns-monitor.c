@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "arguments-parse.h"
+#include "packet-capture.h"
 #include <unistd.h>
 
 
@@ -14,13 +15,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    // Debugging printfs
-    printf("Interface: %s\n", arguments->interface);
-    printf("Verbose: %d\n", arguments->verbose);
-    printf("PCAP File: %s\n", arguments->pcap_file ? arguments->pcap_file : "Not provided");
-    printf("Domain File: %s\n", arguments->domain_file ? arguments->domain_file : "Not provided");
-    printf("Translation File: %s\n", arguments->translation_file ? arguments->translation_file : "Not provided");
-
+    start_packet_capture(arguments);
 
     free(arguments);
     return EXIT_SUCCESS;
