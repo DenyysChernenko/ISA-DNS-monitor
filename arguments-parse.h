@@ -17,11 +17,18 @@ typedef struct ARGUMENTS {
 
 
 // Function declarations
-
-// Function to parse arguments and store it into declared structure "Arguments"
+/**
+ * @brief Parses command-line arguments into an Arguments structure
+ *
+ * @param argc The number of command-line arguments
+ * @param argv An array of command-line argument strings
+ * @return A pointer to an Arguments structure or NULL if parsing fails
+ */
 Arguments *arguments_parsing(int argc, char **argv);
 
-// Help function with usage and detailed explanation of each paramater
-void help();
+/** @brief Write help message with example of usage and description of each paramater
+ *
+ */
+void help(); 
 
 #endif
