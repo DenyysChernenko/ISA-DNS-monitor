@@ -72,31 +72,42 @@ void print_dns_header(dns_header *header) {
 }
 
 void parse_dns_name(const u_char **reader, const u_char *packet, char *buffer, int *len) {
+    const u_char *dns_start_temp = packet + 14 + sizeof(struct ip) + sizeof(struct udphdr);
     int jumped = 0; 
     int offset;    
     int pos = 0;    
     const u_char *orig_reader = *reader; 
+    buffer[0] = '\0';
 
     while (**reader != 0) {
-        if ((**reader & 0xC0) == 0xC0) {
+        if ((**reader & 0xc0) == 0xc0) {
             offset = ntohs(*(uint16_t *)*reader) & 0x3FFF;  
-            *reader += 2;  
+            (*reader) += 2;  
 
             if (!jumped) { 
                 orig_reader = *reader;  
             }
-            *reader = packet + offset; 
+            (*reader) = dns_start_temp + offset; 
             jumped = 1;  
         } else {
             int label_length = **reader; 
-            (*reader)++;  
-
-            strncpy(buffer + pos, (char *)(*reader), label_length);  
-            pos += label_length;
-            buffer[pos++] = '.'; 
-            *reader += label_length;  
+            (*reader)++;
+            if (label_length > 0) {
+               if (pos + label_length + 1 >= 256) { 
+                    fprintf(stderr, "Buffer overflow prevented in DNS name parsing\n");
+                    exit(EXIT_FAILURE);
+                }
+                
+                strncpy(buffer + pos, (char *)(*reader), label_length);  
+                pos += label_length;
+                buffer[pos++] = '.'; 
+                (*reader) += label_length; 
+            } 
         }
     }
+
+    
+
 
     buffer[pos - 1] = '\0';  
     if (jumped) {
@@ -122,7 +133,9 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
         int name_length = 0;
         parse_dns_name(reader, packet, records[i].name, &name_length);
 
-        printf("Parsed domain name in Answer: %s\n", records[i].name);
+
+
+        
         records[i].type = ntohs(*(uint16_t *)(*reader));
         (*reader) += 2;
         records[i].a_class = ntohs(*(uint16_t *)(*reader));
@@ -137,18 +150,14 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
             exit(EXIT_FAILURE);
         }
 
-        records[i].rdata = (char *)malloc(records[i].rdlength + 1);  
-        if (records[i].rdata == NULL) {
-            fprintf(stderr, "Failed to allocate memory for rdata for resource record\n");
-            exit(EXIT_FAILURE);
-        }
-
         if (records[i].type == 1) {  
             if (records[i].rdlength == 4) {  
                 struct in_addr addr;
                 memcpy(&addr, *reader, sizeof(struct in_addr));  
                 records[i].rdata = (char *)malloc(INET_ADDRSTRLEN);  
                 inet_ntop(AF_INET, &addr, records[i].rdata, INET_ADDRSTRLEN);  
+                records[i].rdata[INET_ADDRSTRLEN - 1] = '\0';
+                (*reader) += records[i].rdlength;  
             } else {
                 fprintf(stderr, "Invalid rdlength for A record: expected 4, got %d\n", records[i].rdlength);
                 exit(EXIT_FAILURE);
@@ -159,18 +168,30 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
                 memcpy(&addr, *reader, sizeof(struct in6_addr));  
                 records[i].rdata = (char *)malloc(INET6_ADDRSTRLEN);  
                 inet_ntop(AF_INET6, &addr, records[i].rdata, INET6_ADDRSTRLEN);  
+                records[i].rdata[INET6_ADDRSTRLEN - 1] = '\0';
+                  (*reader) += records[i].rdlength;  
             } else {
                 fprintf(stderr, "Invalid rdlength for AAAA record: expected 16, got %d\n", records[i].rdlength);
                 exit(EXIT_FAILURE);
             }
-        } else {
+         } else if(records[i].type == 5) {
+    
+            records[i].rdata = (char *)malloc(records[i].rdlength + 1);
+            if (records[i].rdata == NULL) {
+                fprintf(stderr, "Failed to allocate memory for CNAME record\n");
+                exit(EXIT_FAILURE);
+            }
+
+            parse_dns_name(reader, packet, records[i].rdata,  (int *)&records[i].rdlength);
+
+            records[i].rdata[records[i].rdlength] = '\0'; 
+         }  else {
             records[i].rdata = (char *)malloc(records[i].rdlength + 1);  
-            memcpy(records[i].rdata, *reader, records[i].rdlength);
+            memcpy(records[i].rdata, *reader, records[i].rdlength);     
             records[i].rdata[records[i].rdlength] = '\0';  
         }
-
-        (*reader) += records[i].rdlength;  
     }
+   
 }
 
 void support_dns_packet_parser(const u_char *packet, dns_packet *dns) {
@@ -204,20 +225,8 @@ void support_dns_packet_parser(const u_char *packet, dns_packet *dns) {
             fprintf(stderr, "Failde to allocate memory for dns question qname\n");
             exit(EXIT_FAILURE);
         }
-
-
-        int pos = 0;
-        while (*reader != 0) {
-             int label_length = *reader;
-             reader++; 
-             strncpy(dns->questions[i].qname + pos, (char *)reader, label_length);
-             pos += label_length;
-             dns->questions[i].qname[pos++] = '.';
-             reader += label_length; 
-         }
-          dns->questions[i].qname[pos - 1] = '\0'; 
-          reader++; 
-
+          int name_length = 0;
+          parse_dns_name(&reader, packet, dns->questions[i].qname, &name_length);
           dns->questions[i].qtype = ntohs(*(uint16_t *)reader);
           reader+=2;
           dns->questions[i].qclass = ntohs(*(uint16_t *)reader);
@@ -231,11 +240,13 @@ void support_dns_packet_parser(const u_char *packet, dns_packet *dns) {
             fprintf(stderr, "Failed to allocate memory for dns answers\n");
             exit(EXIT_FAILURE);
         }
+      
         support_resource_record_parser(&reader, dns->answers, dns->header.an_count, packet);
     }
 
     // Parse Authority Section
     if(dns->header.ns_count > 0) { 
+       
         dns->authorities = (resource_record *)malloc(sizeof(resource_record) * dns->header.ns_count);
         if(dns->authorities == NULL) {
             fprintf(stderr, "Failed to allocate memory for dns authorities\n");
@@ -335,12 +346,27 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
     if (dns.header.an_count > 0) {
         printf("\n[Answer Section]\n");
         for (int i = 0; i < dns.header.an_count; i++) {
-            printf("%s. %d IN %s %s\n", dns.answers[i].name, dns.answers[i].ttl, 
-                (dns.answers[i].type == 1) ? "A" : (dns.answers[i].type == 28) ? "AAAA" : "UNKNOWN", dns.answers[i].rdata);
+            const char *record_type; 
+            switch (dns.answers[i].type) {
+            case 1:
+                record_type = "A";
+                break;
+            case 28:
+                record_type = "AAAA";
+                break;
+            case 5:
+                record_type = "CNAME";
+                break;
+            default:
+                record_type = "UNKNOWN";
+                break;
+        }
+            printf("%s. %d IN %s %s\n", dns.answers[i].name, dns.answers[i].ttl, record_type, dns.answers[i].rdata);
         }
     }
 
     if (dns.header.ns_count > 0) {
+        
         printf("\n[Authority Section]\n");
         for (int i = 0; i < dns.header.ns_count; i++) {
             printf("%s. %d IN NS %s\n", dns.authorities[i].name, dns.authorities[i].ttl, dns.authorities[i].rdata);
@@ -350,8 +376,22 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
     if (dns.header.ar_count > 0) {
         printf("\n[Additional Section]\n");
         for (int i = 0; i < dns.header.ar_count; i++) {
-            printf("%s. %d IN %s %s\n", dns.additionals[i].name, dns.additionals[i].ttl, 
-                   (dns.additionals[i].type == 1) ? "A" : "UNKNOWN", dns.additionals[i].rdata);
+            const char *record_type; 
+            switch (dns.additionals[i].type) {
+            case 1:
+                record_type = "A";
+                break;
+            case 28:
+                record_type = "AAAA";
+                break;
+            case 5:
+                record_type = "CNAME";
+                break;
+            default:
+                record_type = "UNKNOWN";
+                break;
+        }
+            printf("%s. %d IN %s %s\n", dns.additionals[i].name, dns.additionals[i].ttl, record_type, dns.additionals[i].rdata);
         }
     }
 

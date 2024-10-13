@@ -88,18 +88,6 @@ int validate_pcap_file(const char *pcap_file);
  */
 void print_dns_header(dns_header *header);
 
-/**
- * @brief Parses a DNS name from the DNS packet
- *
- * This function extracts a DNS name from the packet, handling both
- * normal labels and compressed names using pointers.
- * 
- * @param reader current position in the packet being parsed
- * @param packet DNS packet 
- * @param buffer Buffer to store the parsed DNS name
- * @param len length of the parsed DNS name
- */
-void parse_dns_name(const u_char **reader, const u_char *packet, char *buffer, int *len);
 
 /**
  * @brief Parses resource records from a DNS packet.
