@@ -109,14 +109,17 @@ void parse_dns_name(const u_char **reader, const u_char *packet, char *buffer, i
     
 
 
-    buffer[pos - 1] = '\0';  
+    if (pos > 0) {
+        buffer[pos - 1] = '.';  
+    }
+    buffer[pos] = '\0'; 
     if (jumped) {
         *reader = orig_reader;  
     } else {
         (*reader)++;  
     }
 
-    *len = pos; 
+    *len = pos + 1; 
 }
 
 
@@ -174,18 +177,55 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
                 fprintf(stderr, "Invalid rdlength for AAAA record: expected 16, got %d\n", records[i].rdlength);
                 exit(EXIT_FAILURE);
             }
-         } else if(records[i].type == 5) {
-    
-            records[i].rdata = (char *)malloc(records[i].rdlength + 1);
+         } else if(records[i].type == 5 || records[i].type == 2) {
+            // TODO 
+            records[i].rdata = (char *)malloc(records[i].rdlength + 2);  
             if (records[i].rdata == NULL) {
                 fprintf(stderr, "Failed to allocate memory for CNAME record\n");
                 exit(EXIT_FAILURE);
             }
-
             parse_dns_name(reader, packet, records[i].rdata,  (int *)&records[i].rdlength);
-
             records[i].rdata[records[i].rdlength] = '\0'; 
-         }  else {
+        } else if(records[i].type == 6) { 
+            
+            records[i].mname = (char *)malloc(256);
+            records[i].rname = (char *)malloc(256);
+
+            if(records[i].mname == NULL || records[i].rname == NULL) {
+                fprintf(stderr, "Failed to allocate memory for either mname or rname");
+                exit(EXIT_FAILURE);
+            }
+            
+            // Parse MNAME and RNAME
+            int mname_length = 0;
+            parse_dns_name(reader, packet, records[i].mname, &mname_length);
+            // printf("parsed domain name: %s\n", records[i].mname);
+            int rname_length = 0;
+            parse_dns_name(reader, packet, records[i].rname, &rname_length);
+            // printf("parsed domain name: %s\n", records[i].rname);
+           
+
+            records[i].serial_number = ntohl(*(uint32_t *)(*reader));
+            *reader += 4;
+            records[i].refresh_interval = ntohl(*(uint32_t *)(*reader));
+            *reader += 4;
+            records[i].retry_interval = ntohl(*(uint32_t *)(*reader));
+            *reader += 4;
+            records[i].expire_limit = ntohl(*(uint32_t *)(*reader));
+            *reader += 4;
+            records[i].minimum_ttl = ntohl(*(uint32_t *)(*reader));
+            *reader += 4;
+        } else if(records[i].type == 15) {
+            records[i].preference = ntohs(*(uint16_t *)(*reader)); 
+            *reader += 2;
+            
+            records[i].rdata = (char *)malloc(records[i].rdlength + 1);
+            int mail_exchange_length = 0;
+            parse_dns_name(reader, packet, records[i].rdata, &mail_exchange_length); 
+            records[i].rdata[records[i].rdlength] = '\0';  
+
+
+        } else {
             records[i].rdata = (char *)malloc(records[i].rdlength + 1);  
             memcpy(records[i].rdata, *reader, records[i].rdlength);     
             records[i].rdata[records[i].rdlength] = '\0';  
@@ -276,17 +316,16 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
 
     // Take IP Header - 14 bytes after Ethernet header
     ip_header = (struct ip *)(packet + 14);
-
     // If IP protocol is not UDP -> skip (Protocol: UDP(17))
     if (ip_header->ip_p != IPPROTO_UDP) {
         return; 
     }
-
     // Extract UDP header 
     udp_header = (struct udphdr *)(packet + 14 + ip_header->ip_hl * 4);
     
     
     // Use support function to make comfort output 
+
     support_dns_packet_parser(packet, &dns);
 
     // Prepare timestamp for output
@@ -337,9 +376,31 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
 
     printf("\n[Question Section]\n");
     for (int i = 0; i < dns.header.q_count; i++) {
-        printf("%s. IN %s\n", dns.questions[i].qname, 
-               (dns.questions[i].qtype == 1) ? "A" : 
-               (dns.questions[i].qtype == 28) ? "AAAA" : "UNKNOWN"); 
+        const char *record_type; 
+        switch (dns.questions[i].qtype) {
+            case 1:
+                record_type = "A";
+                break;
+            case 28:
+                record_type = "AAAA";
+                break;
+            case 5:
+                record_type = "CNAME";
+                break;
+            case 2:
+                record_type = "NS";
+                break;
+            case 6:
+                record_type = "SOA";
+                break;
+            case 15:
+                record_type = "MX";
+                break;
+            default:
+                record_type = "UNKNOWN";
+                break;
+        }
+        printf("%s IN %s\n", dns.questions[i].qname, record_type);
     }
 
 
@@ -357,11 +418,40 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
             case 5:
                 record_type = "CNAME";
                 break;
+            case 2:
+                record_type = "NS";
+                break;
+            case 6:
+                record_type = "SOA";
+                break;
+            case 15:
+                record_type = "MX";
+                break;
             default:
                 record_type = "UNKNOWN";
                 break;
-        }
-            printf("%s. %d IN %s %s\n", dns.answers[i].name, dns.answers[i].ttl, record_type, dns.answers[i].rdata);
+        }   
+            if(strcmp(record_type, "SOA") == 0) {
+                printf("%s %d IN SOA %s %s %u %u %u %u %u\n",
+                    dns.answers[i].name,
+                    dns.answers[i].ttl,
+                    dns.answers[i].mname,
+                    dns.answers[i].rname,
+                    dns.answers[i].serial_number,
+                    dns.answers[i].refresh_interval,
+                    dns.answers[i].retry_interval,
+                    dns.answers[i].expire_limit,
+                    dns.answers[i].minimum_ttl);
+            } else if(strcmp(record_type, "MX") == 0) {
+                printf("%s %d IN MX %d %s\n",
+                    dns.answers[i].name,
+                    dns.answers[i].ttl,
+                    ntohs(dns.answers[i].preference), 
+                    dns.answers[i].rdata); 
+
+            } else {
+                printf("%s %d IN %s %s\n", dns.answers[i].name, dns.answers[i].ttl, record_type, dns.answers[i].rdata);
+            }
         }
     }
 
@@ -369,7 +459,29 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
         
         printf("\n[Authority Section]\n");
         for (int i = 0; i < dns.header.ns_count; i++) {
-            printf("%s. %d IN NS %s\n", dns.authorities[i].name, dns.authorities[i].ttl, dns.authorities[i].rdata);
+             const char *record_type; 
+            switch (dns.authorities[i].type) {
+                 case 2: 
+                    record_type = "NS";
+                    break;
+                 case 6:
+                    record_type = "SOA";
+                    break;
+            }
+            if(strcmp(record_type, "SOA") == 0) {
+                printf("%s %d IN SOA %s %s %u %u %u %u %u\n",
+                    dns.answers[i].name,
+                    dns.answers[i].ttl,
+                    dns.answers[i].mname,
+                    dns.answers[i].rname,
+                    dns.answers[i].serial_number,
+                    dns.answers[i].refresh_interval,
+                    dns.answers[i].retry_interval,
+                    dns.answers[i].expire_limit,
+                    dns.answers[i].minimum_ttl);
+            } else {
+                printf("%s %d IN NS %s\n", dns.authorities[i].name, dns.authorities[i].ttl, dns.authorities[i].rdata);
+            }
         }
     }
 
@@ -387,11 +499,14 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
             case 5:
                 record_type = "CNAME";
                 break;
+            case 2:
+                record_type = "NS";
+                break;
             default:
                 record_type = "UNKNOWN";
                 break;
         }
-            printf("%s. %d IN %s %s\n", dns.additionals[i].name, dns.additionals[i].ttl, record_type, dns.additionals[i].rdata);
+            printf("%s %d IN %s %s\n", dns.additionals[i].name, dns.additionals[i].ttl, record_type, dns.additionals[i].rdata);
         }
     }
 

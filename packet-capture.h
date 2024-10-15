@@ -47,6 +47,21 @@ typedef struct RESOURCE_RECORD {
     uint32_t ttl;       // Time to live
     uint16_t rdlength;  // length of RDATA
     char *rdata;        // Resourse data (ex. an IP adress)
+
+
+    // SOA attributes
+    char *mname;
+    char *rname;
+    uint32_t serial_number;
+    uint32_t refresh_interval;
+    uint32_t retry_interval;
+    uint32_t expire_limit;
+    uint32_t minimum_ttl;
+
+    // MX attributes
+    uint16_t preference;
+    char *mail_exchange;
+
 } resource_record;
 
 
