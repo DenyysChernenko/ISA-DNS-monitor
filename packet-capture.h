@@ -2,6 +2,7 @@
 #include <pcap.h>
 #include <stdint.h>
 #include "arguments-parse.h"
+#include "domain-file-handle.h"
 
 #ifndef PACKET_CAPTURE_H
 #define PACKET_CAPTURE_H
@@ -160,5 +161,8 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
  * @return A pointer to the pcap handle if the filter is set successfully; NULL if some error occurs
  */
 pcap_t *setup_filter(pcap_t *handle, char *filter_exp, bpf_u_int32 net);
+
+
+void insert_if_valid(Hash_Domain_Table* hash_table, const char* domain_name);
 
 #endif

@@ -2,3 +2,5 @@ SOA_test.pcap
 MX_test.pcap
 AAAA_test.pcap
 NS_test.pcap
+CNAME_test.pcap
+dns_ns.pcap

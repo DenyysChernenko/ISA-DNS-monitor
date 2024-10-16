@@ -8,7 +8,24 @@
 #include <pcap.h>
 #include <unistd.h>
 #include "packet-capture.h"
+#include "domain-file-handle.h"
 
+Hash_Domain_Table *hash_table = NULL;
+
+void insert_if_valid(Hash_Domain_Table* hash_table, const char* domain_name) {
+    if (strlen(domain_name) > 0 && hash_table != NULL) {
+        char modified_domain_name[256];
+        strncpy(modified_domain_name, domain_name, sizeof(modified_domain_name) - 1);
+        modified_domain_name[sizeof(modified_domain_name) - 1] = '\0'; 
+
+        size_t len = strlen(modified_domain_name);
+        if (len > 0 && modified_domain_name[len - 1] == '.') {
+            modified_domain_name[len - 1] = '\0'; 
+        }
+
+        insert_domain_into_hashtable(hash_table, modified_domain_name);
+    }
+}
 
 int validate_interface(const char *interface) {
     pcap_if_t *alldevs;
@@ -120,6 +137,7 @@ void parse_dns_name(const u_char **reader, const u_char *packet, char *buffer, i
     }
 
     *len = pos + 1; 
+
 }
 
 
@@ -135,6 +153,7 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
 
         int name_length = 0;
         parse_dns_name(reader, packet, records[i].name, &name_length);
+        insert_if_valid(hash_table, records[i].name);
 
 
 
@@ -185,6 +204,7 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
                 exit(EXIT_FAILURE);
             }
             parse_dns_name(reader, packet, records[i].rdata,  (int *)&records[i].rdlength);
+            insert_if_valid(hash_table, records[i].rdata);
             records[i].rdata[records[i].rdlength] = '\0'; 
         } else if(records[i].type == 6) { 
             
@@ -199,9 +219,11 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
             // Parse MNAME and RNAME
             int mname_length = 0;
             parse_dns_name(reader, packet, records[i].mname, &mname_length);
+            insert_if_valid(hash_table, records[i].mname);
             // printf("parsed domain name: %s\n", records[i].mname);
             int rname_length = 0;
             parse_dns_name(reader, packet, records[i].rname, &rname_length);
+            insert_if_valid(hash_table, records[i].rname);
             // printf("parsed domain name: %s\n", records[i].rname);
            
 
@@ -222,6 +244,7 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
             records[i].rdata = (char *)malloc(records[i].rdlength + 1);
             int mail_exchange_length = 0;
             parse_dns_name(reader, packet, records[i].rdata, &mail_exchange_length); 
+            insert_if_valid(hash_table, records[i].rdata);
             records[i].rdata[records[i].rdlength] = '\0';  
 
 
@@ -267,6 +290,7 @@ void support_dns_packet_parser(const u_char *packet, dns_packet *dns) {
         }
           int name_length = 0;
           parse_dns_name(&reader, packet, dns->questions[i].qname, &name_length);
+          insert_if_valid(hash_table, dns->questions[i].qname);
           dns->questions[i].qtype = ntohs(*(uint16_t *)reader);
           reader+=2;
           dns->questions[i].qclass = ntohs(*(uint16_t *)reader);
@@ -446,7 +470,7 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
                 printf("%s %d IN MX %d %s\n",
                     dns.answers[i].name,
                     dns.answers[i].ttl,
-                    ntohs(dns.answers[i].preference), 
+                    dns.answers[i].preference, 
                     dns.answers[i].rdata); 
 
             } else {
@@ -470,15 +494,15 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
             }
             if(strcmp(record_type, "SOA") == 0) {
                 printf("%s %d IN SOA %s %s %u %u %u %u %u\n",
-                    dns.answers[i].name,
-                    dns.answers[i].ttl,
-                    dns.answers[i].mname,
-                    dns.answers[i].rname,
-                    dns.answers[i].serial_number,
-                    dns.answers[i].refresh_interval,
-                    dns.answers[i].retry_interval,
-                    dns.answers[i].expire_limit,
-                    dns.answers[i].minimum_ttl);
+                    dns.authorities[i].name,
+                    dns.authorities[i].ttl,
+                    dns.authorities[i].mname,
+                    dns.authorities[i].rname,
+                    dns.authorities[i].serial_number,
+                    dns.authorities[i].refresh_interval,
+                    dns.authorities[i].retry_interval,
+                    dns.authorities[i].expire_limit,
+                    dns.authorities[i].minimum_ttl);
             } else {
                 printf("%s %d IN NS %s\n", dns.authorities[i].name, dns.authorities[i].ttl, dns.authorities[i].rdata);
             }
@@ -521,7 +545,7 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
 
 void non_verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr, const u_char *packet) {
    struct ip *ip_header;
-   dns_header *dns;
+   dns_packet dns;
 
 
    // Take IP Header - 14 bytes after Ethernet header
@@ -533,7 +557,8 @@ void non_verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkt
     }
 
    // Take DNS Header, 14 (length of Ethernet header) + IP Header + + UDP headder (fixed size -> 8 bytes) 
-   dns = (dns_header *)(packet + 14 + (ip_header->ip_hl * 4) + sizeof(struct udphdr));
+
+   support_dns_packet_parser(packet, &dns);
 
    // Prepare timestamp for output
    char time_str[64];
@@ -552,28 +577,26 @@ void non_verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkt
    inet_ntop(AF_INET, &(ip_header->ip_dst), dst_ip, INET_ADDRSTRLEN);
 
    // Convert from network byte order to host byte order
-   uint16_t flags = ntohs(dns->flags);
-
-
-   char query_response;
-    if (flags & 0x8000) { 
-        query_response = 'R'; 
+    uint16_t flags = dns.header.flags;
+    uint8_t qr;
+    if ((flags & 0x8000) != 0) { 
+        qr = 'R'; 
     } else {
-        query_response = 'Q'; 
+        qr = 'Q';
     }
 
-   uint16_t question_count = ntohs(dns->q_count);
-   uint16_t answer_count = ntohs(dns->an_count);
-   uint16_t authority_count = ntohs(dns->ns_count);
-   uint16_t additional_count = ntohs(dns->ar_count);
+    uint16_t q_count = ntohs(dns.header.q_count);
+    uint16_t an_count = ntohs(dns.header.an_count);
+    uint16_t ns_count = ntohs(dns.header.ns_count);
+    uint16_t ar_count = ntohs(dns.header.ar_count);
 
    printf("%s %s -> %s (", time_str, src_ip, dst_ip);
    printf("%c %d/%d/%d/%d)\n",
-           query_response,          
-           question_count,          
-           answer_count,            
-           authority_count,         
-           additional_count);      
+           qr,          
+           q_count,          
+           an_count,            
+           ns_count,         
+           ar_count);      
 }
 
 
@@ -598,7 +621,11 @@ void start_packet_capture(Arguments *arguments) {
     pcap_t *handle;
     char errbuf[PCAP_ERRBUF_SIZE];
     char filter_exp[] = "udp port 53";
-    bpf_u_int32 net = 0;   
+    bpf_u_int32 net = 0;
+
+    if(arguments->domain_file != NULL) {
+        hash_table = create_hash_table();
+    }   
 
     if (strlen(arguments->interface) > 0) {
         if(validate_interface(arguments->interface)) {
@@ -639,7 +666,6 @@ void start_packet_capture(Arguments *arguments) {
                 return;
             }
 
-            printf("-------START CAPTURING PCAP FILES-------\n");
             if(arguments->verbose == 1) {
                 pcap_loop(handle, 0, verbose_packet_handler, NULL);
             } else {
@@ -653,7 +679,7 @@ void start_packet_capture(Arguments *arguments) {
         }
     }
 
-
-
-
+    if(arguments->domain_file) {
+        write_domains_to_file(hash_table, arguments->domain_file); 
+    }
 }
