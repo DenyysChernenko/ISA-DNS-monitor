@@ -5,3 +5,5 @@ NS_test.pcap
 CNAME_test.pcap
 dns_ns.pcap
 SRV_test.pcap
+test.txt
+test_2.txt

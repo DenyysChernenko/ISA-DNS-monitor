@@ -76,4 +76,15 @@ bool insert_domain_ip_into_hashtable(Hash_Domain_Table *hash_table, const char *
  */
 bool write_domains_to_file(Hash_Domain_Table *hash_table, const char *file_name);
 
+
+/**
+ * @brief Cleans up and frees the memory associated with a hash table
+ *
+ * This function iterates through all the items of the hash table, frees
+ * all the items in each bucket, and then frees the hash table itself
+ *
+ * @param hash_table Pointer to the hash table to be freed
+ */
+void free_hash_table(Hash_Domain_Table *hash_table);
+
 #endif

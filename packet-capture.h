@@ -83,7 +83,11 @@ typedef struct DNS_PACKET {
 
 
 // Function declarations
-// Starting point to capture DNS packets
+/**
+ * @brief Starting capturing packets based on arguments
+ *
+ * @param arguments Arguments structure with all arguments inside
+ */
 void start_packet_capture(Arguments *arguments);
 
 /**
@@ -158,6 +162,24 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
 
 
 /**
+ * @brief Parses a DNS name from the packet data into a buffer
+ *
+ * This function reads a DNS name from the given packet, handling both
+ * regular labels and compressed labels (indicated by the DNS compression
+ * format). The parsed name is stored in the provided buffer
+ *
+ *
+ * @param reader Pointer to the current position in the DNS packet being parsed
+ *             
+ * @param packet Pointer to the raw packet data from which the DNS name will be parsed
+ * @param buffer Buffer where the parsed DNS name will be stored
+ * @param len Pointer to an integer where the length of the parsed DNS name will be stored (debbuging reasons)
+ *   
+ */
+void parse_dns_name(const u_char **reader, const u_char *packet, char *buffer, int *len);
+
+
+/**
  * @brief Support function for settuping filters (made for comfort using)
  *
  *
@@ -169,6 +191,46 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
 pcap_t *setup_filter(pcap_t *handle, char *filter_exp, bpf_u_int32 net);
 
 
+/**
+ * @brief Converts a DNS class value to its string representation
+ *
+ * This function takes a DNS class value (qclass) as input and returns 
+ * the corresponding string representation
+ * 
+ * @param qclass The DNS class value to convert
+ * @return string representation of the DNS class
+ *         Returns "IN" for qclass 1, and "UNKNOWN" for any other value (open to extending)
+ */
+const char* class_to_string(uint16_t qclass);
+
+
+/**
+ * @brief Inserts a domain name into the hash table if it is valid
+ *
+ * This function checks if the provided domain name is non-empty and if 
+ * the hash table is not NULL. It then inserts it into the specified hash table
+ *
+ * @param hash_table Pointer to the hash table where the domain name will be inserted
+ * @param domain_name The domain name to be inserted
+ *
+ */
 void insert_if_valid(Hash_Domain_Table* hash_table, const char* domain_name);
+
+/**
+ * @brief Inserts a domain name and its corresponding IP address into the hash table if both are valid
+ *
+ * This function checks if the provided hash table, domain name, and IP address are not NULL
+ * It then inserts both the domain name and the IP address into the specified hash table
+ *
+ * @param hash_table Pointer to the hash table where the domain name and IP address will be inserted.=
+ * @param domain_name The domain name to be inserted
+ * @param ip_address The IP address to be associated with the domain name
+ *
+ */
+void insert_if_valid_domain_ip(Hash_Domain_Table* hash_table, const char* domain_name, const char* ip_address);
+
+
+void cleanup_and_exit(Hash_Domain_Table *hash_table_domain, Hash_Domain_Table *hash_table_domain_ip_combined);
+void handle_signal(int signum);
 
 #endif

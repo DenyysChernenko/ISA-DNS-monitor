@@ -4,17 +4,38 @@
 #include <arpa/inet.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
+#include <signal.h>
 #include <time.h>
 #include <pcap.h>
 #include <unistd.h>
 #include "packet-capture.h"
 #include "domain-file-handle.h"
 
+volatile sig_atomic_t stop_capture = 0;
 
-bool skip_record = false;
 Hash_Domain_Table *hash_table_domain = NULL;
 Hash_Domain_Table *hash_table_domain_ip_combined = NULL;
 
+void handle_signal(int signum) {
+    printf("Received signal %d, cleaning up...\n", signum);
+
+    stop_capture = 1; 
+    cleanup_and_exit(hash_table_domain, hash_table_domain_ip_combined);
+}
+
+// Function to clean up resources and exit gracefully
+void cleanup_and_exit(Hash_Domain_Table *hash_table_domain, Hash_Domain_Table *hash_table_domain_ip_combined) {
+    if (hash_table_domain) {
+        free_hash_table(hash_table_domain);  
+    }
+    
+    if (hash_table_domain_ip_combined) {
+        free_hash_table(hash_table_domain_ip_combined);  
+    }
+    
+    printf("Program terminated gracefully.\n");
+    exit(0); 
+}
 
 const char* class_to_string(uint16_t qclass) {
     switch (qclass) {
@@ -233,7 +254,6 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
                 exit(EXIT_FAILURE);
             }
          } else if(records[i].type == 5 || records[i].type == 2) {
-            // TODO 
             records[i].rdata = (char *)malloc(records[i].rdlength + 2);  
             if (records[i].rdata == NULL) {
                 fprintf(stderr, "Failed to allocate memory for CNAME record\n");
@@ -481,8 +501,11 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
                 record_type = "UNKNOWN";
                 break;
         }
-
-        printf("%s %s %s\n", dns.questions[i].qname, class_to_string(dns.questions[i].qclass), record_type);
+        if(strcmp(record_type, "UNKNOWN") != 0) {
+            printf("%s %s %s\n", dns.questions[i].qname, class_to_string(dns.questions[i].qclass), record_type);
+        } else {
+            printf("UNKNOWN TYPE\n");
+        }
     }
 
 
@@ -545,6 +568,8 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
                 dns.answers[i].weight,
                 dns.answers[i].port,
                 dns.answers[i].target); 
+            } else if (strcmp(record_type, "UNKNOWN") == 0) { 
+                printf("UNKNOWN TYPE\n");
             }  else {
                 printf("%s %d %s %s %s\n", dns.answers[i].name, dns.answers[i].ttl, class_to_string(dns.answers[i].a_class), record_type, dns.answers[i].rdata);
             }
@@ -610,6 +635,8 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
                 dns.answers[i].weight,
                 dns.answers[i].port,
                 dns.answers[i].target); 
+            } else if (strcmp(record_type, "UNKNOWN") == 0) { 
+                printf("UNKNOWN TYPE\n");
             } else {
                 printf("%s %d %s %s %s\n", dns.authorities[i].name, dns.authorities[i].ttl, class_to_string(dns.authorities[i].a_class), record_type, dns.authorities[i].rdata);
             }
@@ -675,6 +702,8 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
                 dns.additionals[i].weight,
                 dns.additionals[i].port,
                 dns.additionals[i].target); 
+       } else if (strcmp(record_type, "UNKNOWN") == 0) { 
+                printf("UNKNOWN TYPE\n");
             } else {
                 printf("%s %d %s %s %s\n", dns.additionals[i].name, dns.additionals[i].ttl, class_to_string(dns.additionals[i].a_class), record_type, dns.additionals[i].rdata);
             }
@@ -684,6 +713,7 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
     
 
 
+    printf("====================\n");
     printf("\n");
 
 }
@@ -790,11 +820,16 @@ void start_packet_capture(Arguments *arguments) {
                 pcap_close(handle);
                 return;
             }
-            if(arguments->verbose == 1)  {
-                pcap_loop(handle, 0, verbose_packet_handler, NULL);
-            } else {
-                pcap_loop(handle, 0, non_verbose_packet_handler, NULL);
+            
+            signal(SIGINT, handle_signal);
+            while(!stop_capture) {
+                if(arguments->verbose == 1)  {
+                    pcap_loop(handle, 0, verbose_packet_handler, NULL);
+                } else {
+                    pcap_loop(handle, 0, non_verbose_packet_handler, NULL);
+                }
             }
+
             pcap_close(handle);
 
         } else {
@@ -816,12 +851,12 @@ void start_packet_capture(Arguments *arguments) {
                 pcap_close(handle);
                 return;
             }
+                if(arguments->verbose == 1) {
+                    pcap_loop(handle, 0, verbose_packet_handler, NULL);
+                } else {
+                    pcap_loop(handle, 0, non_verbose_packet_handler, NULL);
+                }
 
-            if(arguments->verbose == 1) {
-                pcap_loop(handle, 0, verbose_packet_handler, NULL);
-            } else {
-                pcap_loop(handle, 0, non_verbose_packet_handler, NULL);
-            }
                 pcap_close(handle);
 
         } else {
@@ -832,9 +867,12 @@ void start_packet_capture(Arguments *arguments) {
 
     if(arguments->domain_file) {
         write_domains_to_file(hash_table_domain, arguments->domain_file); 
+        free_hash_table(hash_table_domain);
     }
 
     if(arguments->translation_file) {
         write_domains_to_file(hash_table_domain_ip_combined, arguments->translation_file);
+        free_hash_table(hash_table_domain_ip_combined);
     }
+
 }

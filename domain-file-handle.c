@@ -94,7 +94,7 @@ bool write_domains_to_file(Hash_Domain_Table *hash_table, const char *file_name)
         return false;
     }
 
-    FILE *file = fopen(file_name, "w");
+    FILE *file = fopen(file_name, "a");
     if (file == NULL) {
         fprintf(stderr, "Debug print: Either hash table NULL or domain name NULL\n");
         return false;
@@ -169,4 +169,21 @@ bool insert_domain_ip_into_hashtable(Hash_Domain_Table *hash_table, const char *
     hash_table->table[hash_index] = new_item;
 
     return true; 
+}
+
+void free_hash_table(Hash_Domain_Table *hash_table) {
+    if (hash_table == NULL) return;
+
+    for (size_t i = 0; i < hash_table->size; i++) {
+        Domain_Item *current_item = hash_table->table[i];
+        while (current_item != NULL) {
+            Domain_Item *temp = current_item;
+            current_item = current_item->next; 
+            free(temp->domain_name);          
+            free(temp);                       
+        }
+    }
+
+    free(hash_table->table); 
+    free(hash_table);        
 }
