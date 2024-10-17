@@ -50,6 +50,19 @@ Hash_Domain_Table *create_hash_table();
  */
 bool insert_domain_into_hashtable(Hash_Domain_Table *hash_table, const char *domain_name);
 
+/**
+ * @brief Inserts a domain name with it's IPv4/IPv6 into the hash table
+ * 
+ * This function adds a domain name with it's ip as one string, to the hash table. If the domain name 
+ * already exists in the table, it skipped
+ * 
+ * @param hash_table Hash_Domain_Table where the domain name will be inserted
+ * @param domain_name domain name string to be inserted
+ * @param ip_address ip, related to domain name
+ * @return true if the domain name was successfully added, false if it already exists or if an error occurred
+ */
+bool insert_domain_ip_into_hashtable(Hash_Domain_Table *hash_table, const char *domain_name, const char *ip_address);
+
 
 /**
  * @brief Writes all unique domain names from the hash table to a file

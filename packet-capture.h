@@ -63,6 +63,12 @@ typedef struct RESOURCE_RECORD {
     uint16_t preference;
     char *mail_exchange;
 
+    // SRV attributes
+    uint16_t priority;
+    uint16_t weight;
+    uint16_t port;
+    char *target; 
+
 } resource_record;
 
 

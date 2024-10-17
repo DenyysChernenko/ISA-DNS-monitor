@@ -10,7 +10,20 @@
 #include "packet-capture.h"
 #include "domain-file-handle.h"
 
-Hash_Domain_Table *hash_table = NULL;
+
+bool skip_record = false;
+Hash_Domain_Table *hash_table_domain = NULL;
+Hash_Domain_Table *hash_table_domain_ip_combined = NULL;
+
+
+const char* class_to_string(uint16_t qclass) {
+    switch (qclass) {
+        case 1: 
+            return "IN";
+        default: 
+            return "UNKNOWN";
+    }
+}
 
 void insert_if_valid(Hash_Domain_Table* hash_table, const char* domain_name) {
     if (strlen(domain_name) > 0 && hash_table != NULL) {
@@ -23,9 +36,26 @@ void insert_if_valid(Hash_Domain_Table* hash_table, const char* domain_name) {
             modified_domain_name[len - 1] = '\0'; 
         }
 
-        insert_domain_into_hashtable(hash_table, modified_domain_name);
+        insert_domain_into_hashtable(hash_table_domain, modified_domain_name);
     }
 }
+
+void insert_if_valid_domain_ip(Hash_Domain_Table* hash_table, const char* domain_name, const char* ip_address) {
+     if (hash_table != NULL && domain_name != NULL && ip_address != NULL) { 
+
+    char modified_domain_name[256];
+    strncpy(modified_domain_name, domain_name, sizeof(modified_domain_name) - 1);
+    modified_domain_name[sizeof(modified_domain_name) - 1] = '\0'; 
+
+    size_t len = strlen(modified_domain_name);
+    if (len > 0 && modified_domain_name[len - 1] == '.') {
+        modified_domain_name[len - 1] = '\0'; 
+    }
+
+    insert_domain_ip_into_hashtable(hash_table_domain_ip_combined, modified_domain_name, ip_address);
+     }
+}
+
 
 int validate_interface(const char *interface) {
     pcap_if_t *alldevs;
@@ -144,6 +174,7 @@ void parse_dns_name(const u_char **reader, const u_char *packet, char *buffer, i
 
 void support_resource_record_parser(const u_char **reader, resource_record *records, int count, const u_char *packet) {
     for (int i = 0; i < count; i++) {
+              
         records[i].name = (char *)malloc(256);
 
         if (records[i].name == NULL) {
@@ -153,11 +184,8 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
 
         int name_length = 0;
         parse_dns_name(reader, packet, records[i].name, &name_length);
-        insert_if_valid(hash_table, records[i].name);
+        insert_if_valid(hash_table_domain, records[i].name);
 
-
-
-        
         records[i].type = ntohs(*(uint16_t *)(*reader));
         (*reader) += 2;
         records[i].a_class = ntohs(*(uint16_t *)(*reader));
@@ -166,6 +194,12 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
         (*reader) += 4;
         records[i].rdlength = ntohs(*(uint16_t *)(*reader));
         (*reader) += 2;
+        
+
+        if (records[i].type != 1 && records[i].type != 2 && records[i].type != 5 &&
+            records[i].type != 6 && records[i].type != 15 && records[i].type != 28 && records[i].type != 33) {
+            continue; 
+        }
 
         if (records[i].rdlength <= 0) {
             fprintf(stderr, "Invalid data length, cannot be less or equal than zero\n");
@@ -180,6 +214,7 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
                 inet_ntop(AF_INET, &addr, records[i].rdata, INET_ADDRSTRLEN);  
                 records[i].rdata[INET_ADDRSTRLEN - 1] = '\0';
                 (*reader) += records[i].rdlength;  
+                insert_if_valid_domain_ip(hash_table_domain_ip_combined, records[i].name, records[i].rdata);
             } else {
                 fprintf(stderr, "Invalid rdlength for A record: expected 4, got %d\n", records[i].rdlength);
                 exit(EXIT_FAILURE);
@@ -191,7 +226,8 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
                 records[i].rdata = (char *)malloc(INET6_ADDRSTRLEN);  
                 inet_ntop(AF_INET6, &addr, records[i].rdata, INET6_ADDRSTRLEN);  
                 records[i].rdata[INET6_ADDRSTRLEN - 1] = '\0';
-                  (*reader) += records[i].rdlength;  
+                (*reader) += records[i].rdlength;  
+                insert_if_valid_domain_ip(hash_table_domain_ip_combined, records[i].name, records[i].rdata);
             } else {
                 fprintf(stderr, "Invalid rdlength for AAAA record: expected 16, got %d\n", records[i].rdlength);
                 exit(EXIT_FAILURE);
@@ -204,7 +240,7 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
                 exit(EXIT_FAILURE);
             }
             parse_dns_name(reader, packet, records[i].rdata,  (int *)&records[i].rdlength);
-            insert_if_valid(hash_table, records[i].rdata);
+            insert_if_valid(hash_table_domain, records[i].rdata);
             records[i].rdata[records[i].rdlength] = '\0'; 
         } else if(records[i].type == 6) { 
             
@@ -219,11 +255,11 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
             // Parse MNAME and RNAME
             int mname_length = 0;
             parse_dns_name(reader, packet, records[i].mname, &mname_length);
-            insert_if_valid(hash_table, records[i].mname);
+            insert_if_valid(hash_table_domain, records[i].mname);
             // printf("parsed domain name: %s\n", records[i].mname);
             int rname_length = 0;
             parse_dns_name(reader, packet, records[i].rname, &rname_length);
-            insert_if_valid(hash_table, records[i].rname);
+            insert_if_valid(hash_table_domain, records[i].rname);
             // printf("parsed domain name: %s\n", records[i].rname);
            
 
@@ -244,10 +280,28 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
             records[i].rdata = (char *)malloc(records[i].rdlength + 1);
             int mail_exchange_length = 0;
             parse_dns_name(reader, packet, records[i].rdata, &mail_exchange_length); 
-            insert_if_valid(hash_table, records[i].rdata);
+            insert_if_valid(hash_table_domain, records[i].rdata);
             records[i].rdata[records[i].rdlength] = '\0';  
 
+        } else if (records[i].type == 33) {
+            records[i].priority = ntohs(*(uint16_t *)(*reader)); 
+            *reader += 2;
+            records[i].weight = ntohs(*(uint16_t *)(*reader));   
+            *reader += 2;
+            records[i].port = ntohs(*(uint16_t *)(*reader));     
+            *reader += 2;
 
+            records[i].target = (char *)malloc(records[i].rdlength -6 + 1);
+            if (records[i].target == NULL) {
+                fprintf(stderr, "Failed to allocate memory for SRV target\n");
+                exit(EXIT_FAILURE);
+            }
+
+            int target_length = 0;
+            parse_dns_name(reader, packet, records[i].target, &target_length);
+            insert_if_valid(hash_table_domain, records[i].target);
+            records[i].target[target_length] = '\0'; 
+    
         } else {
             records[i].rdata = (char *)malloc(records[i].rdlength + 1);  
             memcpy(records[i].rdata, *reader, records[i].rdlength);     
@@ -290,7 +344,7 @@ void support_dns_packet_parser(const u_char *packet, dns_packet *dns) {
         }
           int name_length = 0;
           parse_dns_name(&reader, packet, dns->questions[i].qname, &name_length);
-          insert_if_valid(hash_table, dns->questions[i].qname);
+          insert_if_valid(hash_table_domain, dns->questions[i].qname);
           dns->questions[i].qtype = ntohs(*(uint16_t *)reader);
           reader+=2;
           dns->questions[i].qclass = ntohs(*(uint16_t *)reader);
@@ -420,11 +474,15 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
             case 15:
                 record_type = "MX";
                 break;
+            case 33:
+                record_type = "SRV";
+                break;
             default:
                 record_type = "UNKNOWN";
                 break;
         }
-        printf("%s IN %s\n", dns.questions[i].qname, record_type);
+
+        printf("%s %s %s\n", dns.questions[i].qname, class_to_string(dns.questions[i].qclass), record_type);
     }
 
 
@@ -451,14 +509,18 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
             case 15:
                 record_type = "MX";
                 break;
+            case 33: 
+                record_type = "SRV";
+                break;
             default:
                 record_type = "UNKNOWN";
                 break;
         }   
             if(strcmp(record_type, "SOA") == 0) {
-                printf("%s %d IN SOA %s %s %u %u %u %u %u\n",
+                printf("%s %d %s SOA %s %s %u %u %u %u %u\n",
                     dns.answers[i].name,
                     dns.answers[i].ttl,
+                    class_to_string(dns.answers[i].a_class),
                     dns.answers[i].mname,
                     dns.answers[i].rname,
                     dns.answers[i].serial_number,
@@ -467,35 +529,64 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
                     dns.answers[i].expire_limit,
                     dns.answers[i].minimum_ttl);
             } else if(strcmp(record_type, "MX") == 0) {
-                printf("%s %d IN MX %d %s\n",
+                    printf("%s %d %s MX %d %s\n",
                     dns.answers[i].name,
                     dns.answers[i].ttl,
+                    class_to_string(dns.answers[i].a_class),
                     dns.answers[i].preference, 
                     dns.answers[i].rdata); 
 
-            } else {
-                printf("%s %d IN %s %s\n", dns.answers[i].name, dns.answers[i].ttl, record_type, dns.answers[i].rdata);
+            } else if (strcmp(record_type, "SRV") == 0) { 
+                printf("%s %d %s SRV %u %u %u %s\n",
+                dns.answers[i].name,
+                dns.answers[i].ttl,
+                class_to_string(dns.answers[i].a_class),
+                dns.answers[i].priority,
+                dns.answers[i].weight,
+                dns.answers[i].port,
+                dns.answers[i].target); 
+            }  else {
+                printf("%s %d %s %s %s\n", dns.answers[i].name, dns.answers[i].ttl, class_to_string(dns.answers[i].a_class), record_type, dns.answers[i].rdata);
             }
         }
-    }
+    } 
 
     if (dns.header.ns_count > 0) {
-        
         printf("\n[Authority Section]\n");
         for (int i = 0; i < dns.header.ns_count; i++) {
              const char *record_type; 
             switch (dns.authorities[i].type) {
-                 case 2: 
+                case 1:
+                    record_type = "A";
+                    break;
+                case 28:
+                    record_type = "AAAA";
+                    break;
+                case 5:
+                    record_type = "CNAME";
+                    break;
+                case 2:
                     record_type = "NS";
                     break;
-                 case 6:
+                case 6:
                     record_type = "SOA";
                     break;
+                case 15:
+                    record_type = "MX";
+                    break;
+                case 33: 
+                    record_type = "SRV";
+                    break;
+                default:
+                    record_type = "UNKNOWN";
+                    break;
+
             }
             if(strcmp(record_type, "SOA") == 0) {
-                printf("%s %d IN SOA %s %s %u %u %u %u %u\n",
+                printf("%s %d %s SOA %s %s %u %u %u %u %u\n",
                     dns.authorities[i].name,
                     dns.authorities[i].ttl,
+                    class_to_string(dns.authorities[i].a_class),
                     dns.authorities[i].mname,
                     dns.authorities[i].rname,
                     dns.authorities[i].serial_number,
@@ -503,8 +594,24 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
                     dns.authorities[i].retry_interval,
                     dns.authorities[i].expire_limit,
                     dns.authorities[i].minimum_ttl);
+            } else if(strcmp(record_type, "MX") == 0) {
+                    printf("%s %d %s MX %d %s\n",
+                    dns.authorities[i].name,
+                    dns.authorities[i].ttl,
+                    class_to_string(dns.authorities[i].a_class),
+                    dns.authorities[i].preference, 
+                    dns.authorities[i].rdata); 
+            } else if (strcmp(record_type, "SRV") == 0) { 
+                printf("%s %d %s SRV %u %u %u %s\n",
+                dns.answers[i].name,
+                dns.answers[i].ttl,
+                class_to_string(dns.answers[i].a_class),
+                dns.answers[i].priority,
+                dns.answers[i].weight,
+                dns.answers[i].port,
+                dns.answers[i].target); 
             } else {
-                printf("%s %d IN NS %s\n", dns.authorities[i].name, dns.authorities[i].ttl, dns.authorities[i].rdata);
+                printf("%s %d %s %s %s\n", dns.authorities[i].name, dns.authorities[i].ttl, class_to_string(dns.authorities[i].a_class), record_type, dns.authorities[i].rdata);
             }
         }
     }
@@ -526,11 +633,51 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
             case 2:
                 record_type = "NS";
                 break;
+            case 6:
+                record_type = "SOA";
+                break;
+            case 15:
+                record_type = "MX";
+                break;
+            case 33: 
+                record_type = "SRV";
+                break;
             default:
                 record_type = "UNKNOWN";
                 break;
         }
-            printf("%s %d IN %s %s\n", dns.additionals[i].name, dns.additionals[i].ttl, record_type, dns.additionals[i].rdata);
+
+        if (strcmp(record_type, "SOA") == 0) {
+                    printf("%s %d %s SOA %s %s %u %u %u %u %u\n",
+                    dns.additionals[i].name,
+                    dns.additionals[i].ttl,
+                    class_to_string(dns.additionals[i].a_class),
+                    dns.additionals[i].mname,
+                    dns.additionals[i].rname,
+                    dns.additionals[i].serial_number,
+                    dns.additionals[i].refresh_interval,
+                    dns.additionals[i].retry_interval,
+                    dns.additionals[i].expire_limit,
+                    dns.additionals[i].minimum_ttl);
+        } else if (strcmp(record_type, "MX") == 0) {
+                    printf("%s %d %s MX %d %s\n",
+                    dns.additionals[i].name,
+                    dns.additionals[i].ttl,
+                    class_to_string(dns.additionals[i].a_class),
+                    dns.additionals[i].preference, 
+                    dns.additionals[i].rdata); 
+        } else if (strcmp(record_type, "SRV") == 0) { 
+                printf("%s %d %s SRV %u %u %u %s\n",
+                dns.additionals[i].name,
+                dns.additionals[i].ttl,
+                class_to_string(dns.additionals[i].a_class),
+                dns.additionals[i].priority,
+                dns.additionals[i].weight,
+                dns.additionals[i].port,
+                dns.additionals[i].target); 
+            } else {
+                printf("%s %d %s %s %s\n", dns.additionals[i].name, dns.additionals[i].ttl, class_to_string(dns.additionals[i].a_class), record_type, dns.additionals[i].rdata);
+            }
         }
     }
 
@@ -624,8 +771,12 @@ void start_packet_capture(Arguments *arguments) {
     bpf_u_int32 net = 0;
 
     if(arguments->domain_file != NULL) {
-        hash_table = create_hash_table();
+        hash_table_domain = create_hash_table();
     }   
+
+    if(arguments->translation_file != NULL) {
+        hash_table_domain_ip_combined = create_hash_table();
+    }
 
     if (strlen(arguments->interface) > 0) {
         if(validate_interface(arguments->interface)) {
@@ -680,6 +831,10 @@ void start_packet_capture(Arguments *arguments) {
     }
 
     if(arguments->domain_file) {
-        write_domains_to_file(hash_table, arguments->domain_file); 
+        write_domains_to_file(hash_table_domain, arguments->domain_file); 
+    }
+
+    if(arguments->translation_file) {
+        write_domains_to_file(hash_table_domain_ip_combined, arguments->translation_file);
     }
 }

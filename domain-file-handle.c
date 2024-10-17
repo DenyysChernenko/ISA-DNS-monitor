@@ -112,3 +112,61 @@ bool write_domains_to_file(Hash_Domain_Table *hash_table, const char *file_name)
     fclose(file);  
     return true;   
 }
+
+
+bool insert_domain_ip_into_hashtable(Hash_Domain_Table *hash_table, const char *domain_name, const char *ip_address) {
+   if (hash_table == NULL) {
+        fprintf(stderr, "Error: Hash table is NULL\n");
+        return false;
+    }
+    if (domain_name == NULL) {
+        fprintf(stderr, "Error: Domain name is NULL\n");
+        return false;
+    }
+    if (ip_address == NULL) {
+        fprintf(stderr, "Error: IP address is NULL\n");
+        return false;
+    }
+    if (strlen(domain_name) == 0) {
+        fprintf(stderr, "Error: Domain name is empty\n");
+        return false;
+    }
+    if (strlen(ip_address) == 0) {
+        fprintf(stderr, "Error: IP address is empty\n");
+        return false;
+    }
+
+    char domain_ip_combined[256];
+    snprintf(domain_ip_combined, sizeof(domain_ip_combined), "%s %s", domain_name, ip_address);
+
+    unsigned long index = djb2_hash(domain_ip_combined);
+    unsigned long hash_index = index % hash_table->size;
+    Domain_Item *current_item = hash_table->table[hash_index];
+
+    while (current_item != NULL) {
+        if (strcmp(current_item->domain_name, domain_ip_combined) == 0) {
+            return false;
+        }
+        current_item = current_item->next;
+    }
+
+    Domain_Item *new_item = malloc(sizeof(Domain_Item));
+    if (new_item == NULL) {
+        fprintf(stderr, "Failed to allocate memory for new domain item\n");
+        exit(EXIT_FAILURE);
+    }
+
+    new_item->domain_name = malloc(strlen(domain_ip_combined) + 1);
+    if (new_item->domain_name == NULL) {
+        fprintf(stderr, "Failed to allocate memory for domain name string\n");
+        free(new_item);
+        exit(EXIT_FAILURE);
+    }
+
+    strcpy(new_item->domain_name, domain_ip_combined);
+
+    new_item->next = hash_table->table[hash_index];
+    hash_table->table[hash_index] = new_item;
+
+    return true; 
+}

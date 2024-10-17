@@ -24,6 +24,14 @@ int main(int argc, char *argv[]) {
         } 
     }
 
+    if(arguments->translation_file != NULL) {
+        FILE *translate_file = fopen(arguments->translation_file, "w");
+        if(translate_file != NULL) {
+            fclose(translate_file);
+            printf("Debbuging print: Translate file exists: %s\n", arguments->translation_file);
+        }
+    }
+
     start_packet_capture(arguments);
 
     free(arguments);
