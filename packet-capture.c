@@ -4,6 +4,7 @@
 #include <arpa/inet.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
+#include <netinet/ip6.h> 
 #include <signal.h>
 #include <time.h>
 #include <pcap.h>
@@ -293,7 +294,19 @@ void print_dns_header(dns_header *header) {
 }
 
 void parse_dns_name(const u_char **reader, const u_char *packet, char *buffer, int *len) {
-    const u_char *dns_start_temp = packet + 14 + sizeof(struct ip) + sizeof(struct udphdr);
+    const u_char *dns_start_temp;
+    uint16_t ethertype = ntohs(*(uint16_t *)(packet + 12));
+
+    if (ethertype == 0x0800) { 
+        dns_start_temp = packet + 14 + sizeof(struct ip) + sizeof(struct udphdr);
+    } else if (ethertype == 0x86dd) { 
+        dns_start_temp = packet + 14 + sizeof(struct ip6_hdr) + sizeof(struct udphdr);
+    }  else {
+        printf("Unsupported packet type for DNS parsing\n");
+        return; 
+    }
+
+
     int jumped = 0; 
     int offset;    
     int pos = 0;    
@@ -372,6 +385,7 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
 
         if (records[i].type != 1 && records[i].type != 2 && records[i].type != 5 &&
             records[i].type != 6 && records[i].type != 15 && records[i].type != 28 && records[i].type != 33) {
+            (*reader) +=  records[i].rdlength;
             continue; 
         }
 
@@ -485,7 +499,18 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
 }
 
 void support_dns_packet_parser(const u_char *packet, dns_packet *dns) {
-    const u_char *dns_start = packet + 14 + sizeof(struct ip) + sizeof(struct udphdr);
+    uint16_t ethertype = ntohs(*(uint16_t *)(packet + 12));
+    
+    const u_char *dns_start;
+    if (ethertype == 0x0800) { 
+        dns_start = packet + 14 + sizeof(struct ip) + sizeof(struct udphdr);
+    } else if (ethertype == 0x86dd) { 
+        dns_start = packet + 14 + sizeof(struct ip6_hdr) + sizeof(struct udphdr);
+    }  else {
+        printf("Unsupported packet type for DNS parsing\n");
+        return; 
+    }
+
 
     // Parse DNS header with all flags, id and counts
     dns->header = *(dns_header *)dns_start;
@@ -636,42 +661,49 @@ void support_dns_packet_parser(const u_char *packet, dns_packet *dns) {
 }
 
 void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr, const u_char *packet) {
-    struct ip *ip_header;
-    struct udphdr *udp_header;
-    dns_packet dns;
 
-    // Take IP Header - 14 bytes after Ethernet header
-    ip_header = (struct ip *)(packet + 14);
-    // If IP protocol is not UDP -> skip (Protocol: UDP(17))
-    if (ip_header->ip_p != IPPROTO_UDP) {
-        return; 
-    }
-    // Extract UDP header 
-    udp_header = (struct udphdr *)(packet + 14 + ip_header->ip_hl * 4);
-    
-    
-    // Use support function to make comfort output 
-
-    support_dns_packet_parser(packet, &dns);
-
-    // Prepare timestamp for output
     char time_str[64];
     struct tm *ltime;
     time_t local_tv_sec = pkthdr->ts.tv_sec;
     ltime = localtime(&local_tv_sec);
     strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", ltime);
 
-    // Prepare for containing src_ip and dst_ip
-    char src_ip[INET_ADDRSTRLEN];
-    char dst_ip[INET_ADDRSTRLEN];
+    struct ip *ip_header;
+    struct ip6_hdr *ipv6_header;
+    const struct udphdr *udp_header;
+    dns_packet dns;
 
-    // Convert IP src and IP dst from binary to string
-    inet_ntop(AF_INET, &(ip_header->ip_src), src_ip, INET_ADDRSTRLEN);
-    inet_ntop(AF_INET, &(ip_header->ip_dst), dst_ip, INET_ADDRSTRLEN);
+    char src_ip[INET6_ADDRSTRLEN]; 
+    char dst_ip[INET6_ADDRSTRLEN]; 
 
-    // Get source and destination port from UDP header
-    uint16_t src_port = ntohs(udp_header->uh_sport);
-    uint16_t dst_port = ntohs(udp_header->uh_dport);
+    uint16_t ethertype = ntohs(*(uint16_t *)(packet + 12));
+    uint16_t src_port, dst_port; 
+
+   if (ethertype == 0x0800) { 
+        ip_header = (struct ip *)(packet + 14); 
+
+        inet_ntop(AF_INET, &(ip_header->ip_src), src_ip, INET_ADDRSTRLEN);
+        inet_ntop(AF_INET, &(ip_header->ip_dst), dst_ip, INET_ADDRSTRLEN);
+
+        udp_header = (struct udphdr *)(packet + 14 + ip_header->ip_hl * 4); 
+        src_port = ntohs(udp_header->uh_sport);
+        dst_port = ntohs(udp_header->uh_dport);
+    } else if (ethertype == 0x86dd) { // IPv6
+        ipv6_header = (struct ip6_hdr *)(packet + 14);
+
+        inet_ntop(AF_INET6, &(ipv6_header->ip6_src), src_ip, INET6_ADDRSTRLEN);
+        inet_ntop(AF_INET6, &(ipv6_header->ip6_dst), dst_ip, INET6_ADDRSTRLEN);
+
+        udp_header = (struct udphdr *)(packet + 14 + sizeof(struct ip6_hdr)); 
+        src_port = ntohs(udp_header->uh_sport);
+        dst_port = ntohs(udp_header->uh_dport);
+    } else {
+        printf("Unsupported packet type\n");
+        return;
+    }
+
+
+    support_dns_packet_parser(packet, &dns);
 
     // DNS Header flags
     uint16_t flags = dns.header.flags;
@@ -889,6 +921,7 @@ void start_packet_capture(Arguments *arguments) {
 
     if(arguments->pcap_file) {
         if(validate_pcap_file(arguments->pcap_file)) {
+
             handle = pcap_open_offline(arguments->pcap_file, errbuf);
 
             if(handle == NULL) {

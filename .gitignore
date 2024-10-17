@@ -8,3 +8,7 @@ SRV_test.pcap
 test.txt
 test_2.txt
 valgrind.log
+ALL_test.pcap
+output.txt
+domain.txt
+translate.txt
