@@ -23,7 +23,6 @@ void handle_signal(int signum) {
     cleanup_and_exit(hash_table_domain, hash_table_domain_ip_combined);
 }
 
-// Function to clean up resources and exit gracefully
 void cleanup_and_exit(Hash_Domain_Table *hash_table_domain, Hash_Domain_Table *hash_table_domain_ip_combined) {
     if (hash_table_domain) {
         free_hash_table(hash_table_domain);  
@@ -37,6 +36,103 @@ void cleanup_and_exit(Hash_Domain_Table *hash_table_domain, Hash_Domain_Table *h
     exit(0); 
 }
 
+
+void free_dns_packet(dns_packet *dns) {
+    if (dns == NULL) {
+        return;
+    }
+
+    if (dns->questions) {
+        for (int i = 0; i < dns->header.q_count; i++) {
+            if (dns->questions[i].qname) {
+                free(dns->questions[i].qname);
+            }
+        }
+        free(dns->questions); 
+    }
+
+    if (dns->header.an_count > 0) {
+        for (int i = 0; i < dns->header.an_count; i++) {
+            if (dns->answers[i].name) {
+                free(dns->answers[i].name);     
+            }
+            if (dns->answers[i].rdata) {
+                free(dns->answers[i].rdata);    
+            }
+
+            if (dns->answers[i].mname) {
+                free(dns->answers[i].mname);      
+            }
+            if (dns->answers[i].rname) {
+                free(dns->answers[i].rname);     
+            }
+
+            if (dns->answers[i].mail_exchange) {
+                free(dns->answers[i].mail_exchange);
+            }
+
+            if (dns->answers[i].target) {
+                free(dns->answers[i].target);  
+            }
+        }
+        free(dns->answers);
+    }
+
+    if (dns->header.ns_count > 0) {
+        for (int i = 0; i < dns->header.ns_count; i++) {
+            if (dns->authorities[i].name) {
+                free(dns->authorities[i].name);   
+            }
+            if (dns->authorities[i].rdata) {
+                free(dns->authorities[i].rdata);   
+            }
+
+            if (dns->authorities[i].mname) {
+                free(dns->authorities[i].mname);  
+            }
+            if (dns->authorities[i].rname) {
+                free(dns->authorities[i].rname);  
+            }
+
+            if (dns->authorities[i].mail_exchange) {
+                free(dns->authorities[i].mail_exchange);
+            }
+
+            if (dns->authorities[i].target) {
+                free(dns->authorities[i].target);  
+            }
+        }
+        free(dns->authorities); 
+    }
+
+    if (dns->header.ar_count > 0) {
+        for (int i = 0; i < dns->header.ar_count; i++) {
+            if (dns->additionals[i].name) {
+                free(dns->additionals[i].name);    
+            }
+            if (dns->additionals[i].rdata) {
+                free(dns->additionals[i].rdata);   
+            }
+            if (dns->additionals[i].mname) {
+                free(dns->additionals[i].mname); 
+            }
+            if (dns->additionals[i].rname) {
+                free(dns->additionals[i].rname);   
+            }
+            if (dns->additionals[i].mail_exchange) {
+                free(dns->additionals[i].mail_exchange);
+            }
+
+            if (dns->additionals[i].target) {
+                free(dns->additionals[i].target);  
+            }
+        }
+        free(dns->additionals); 
+    }
+
+}
+
+
 const char* class_to_string(uint16_t qclass) {
     switch (qclass) {
         case 1: 
@@ -45,6 +141,63 @@ const char* class_to_string(uint16_t qclass) {
             return "UNKNOWN";
     }
 }
+
+const char* get_record_type(uint16_t type) {
+    switch (type) {
+        case 1:  return "A";
+        case 28: return "AAAA";
+        case 5:  return "CNAME";
+        case 2:  return "NS";
+        case 6:  return "SOA";
+        case 15: return "MX";
+        case 33: return "SRV";
+        default: return "UNKNOWN";
+    }
+}
+
+void print_resource_record(const resource_record* record) {
+    const char* record_type = get_record_type(record->type);
+    
+    if (strcmp(record_type, "SOA") == 0) {
+        printf("%s %d %s SOA %s %s %u %u %u %u %u\n",
+               record->name,
+               record->ttl,
+               class_to_string(record->a_class),
+               record->mname,
+               record->rname,
+               record->serial_number,
+               record->refresh_interval,
+               record->retry_interval,
+               record->expire_limit,
+               record->minimum_ttl);
+    } else if (strcmp(record_type, "MX") == 0) {
+        printf("%s %d %s MX %d %s\n",
+               record->name,
+               record->ttl,
+               class_to_string(record->a_class),
+               record->preference,
+               record->rdata);
+    } else if (strcmp(record_type, "SRV") == 0) {
+        printf("%s %d %s SRV %u %u %u %s\n",
+               record->name,
+               record->ttl,
+               class_to_string(record->a_class),
+               record->priority,
+               record->weight,
+               record->port,
+               record->target);
+    } else if (strcmp(record_type, "UNKNOWN") == 0) {
+        printf("UNKNOWN TYPE\n");
+    } else {
+        printf("%s %d %s %s %s\n",
+               record->name,
+               record->ttl,
+               class_to_string(record->a_class),
+               record_type,
+               record->rdata);
+    }
+}
+
 
 void insert_if_valid(Hash_Domain_Table* hash_table, const char* domain_name) {
     if (strlen(domain_name) > 0 && hash_table != NULL) {
@@ -378,18 +531,67 @@ void support_dns_packet_parser(const u_char *packet, dns_packet *dns) {
             fprintf(stderr, "Failed to allocate memory for dns answers\n");
             exit(EXIT_FAILURE);
         }
+        for (int i = 0; i < dns->header.an_count; i++) {
+            dns->answers[i].name = NULL;
+            dns->answers[i].type = 0;
+            dns->answers[i].a_class = 0;
+            dns->answers[i].ttl = 0;
+            dns->answers[i].rdlength = 0;
+            dns->answers[i].rdata = NULL;
+
+            dns->answers[i].mname = NULL;
+            dns->answers[i].rname = NULL;
+            dns->answers[i].serial_number = 0;
+            dns->answers[i].refresh_interval = 0;
+            dns->answers[i].retry_interval = 0;
+            dns->answers[i].expire_limit = 0;
+            dns->answers[i].minimum_ttl = 0;
+
+            dns->answers[i].preference = 0;
+            dns->answers[i].mail_exchange = NULL;
+
+            dns->answers[i].priority = 0;
+            dns->answers[i].weight = 0;
+            dns->answers[i].port = 0;
+            dns->answers[i].target = NULL;
+        }
       
         support_resource_record_parser(&reader, dns->answers, dns->header.an_count, packet);
     }
 
     // Parse Authority Section
     if(dns->header.ns_count > 0) { 
-       
         dns->authorities = (resource_record *)malloc(sizeof(resource_record) * dns->header.ns_count);
         if(dns->authorities == NULL) {
             fprintf(stderr, "Failed to allocate memory for dns authorities\n");
             exit(EXIT_FAILURE);
         }
+
+        for (int i = 0; i < dns->header.ns_count; i++) {
+            dns->authorities[i].name = NULL;
+            dns->authorities[i].type = 0;
+            dns->authorities[i].a_class = 0;
+            dns->authorities[i].ttl = 0;
+            dns->authorities[i].rdlength = 0;
+            dns->authorities[i].rdata = NULL;
+
+            dns->authorities[i].mname = NULL;
+            dns->authorities[i].rname = NULL;
+            dns->authorities[i].serial_number = 0;
+            dns->authorities[i].refresh_interval = 0;
+            dns->authorities[i].retry_interval = 0;
+            dns->authorities[i].expire_limit = 0;
+            dns->authorities[i].minimum_ttl = 0;
+
+            dns->authorities[i].preference = 0;
+            dns->authorities[i].mail_exchange = NULL;
+
+            dns->authorities[i].priority = 0;
+            dns->authorities[i].weight = 0;
+            dns->authorities[i].port = 0;
+            dns->authorities[i].target = NULL;
+        }
+
         support_resource_record_parser(&reader, dns->authorities, dns->header.ns_count, packet);
     }
 
@@ -400,6 +602,32 @@ void support_dns_packet_parser(const u_char *packet, dns_packet *dns) {
             fprintf(stderr, "Failed to allocate memory for dns additionals\n");
             exit(EXIT_FAILURE);
         }
+
+        for (int i = 0; i < dns->header.ar_count; i++) {
+            dns->additionals[i].name = NULL;
+            dns->additionals[i].type = 0;
+            dns->additionals[i].a_class = 0;
+            dns->additionals[i].ttl = 0;
+            dns->additionals[i].rdlength = 0;
+            dns->additionals[i].rdata = NULL;
+
+            dns->additionals[i].mname = NULL;
+            dns->additionals[i].rname = NULL;
+            dns->additionals[i].serial_number = 0;
+            dns->additionals[i].refresh_interval = 0;
+            dns->additionals[i].retry_interval = 0;
+            dns->additionals[i].expire_limit = 0;
+            dns->additionals[i].minimum_ttl = 0;
+
+            dns->additionals[i].preference = 0;
+            dns->additionals[i].mail_exchange = NULL;
+
+            dns->additionals[i].priority = 0;
+            dns->additionals[i].weight = 0;
+            dns->additionals[i].port = 0;
+            dns->additionals[i].target = NULL;
+        }
+
         support_resource_record_parser(&reader, dns->additionals, dns->header.ar_count, packet);
     }
 
@@ -508,205 +736,24 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
         }
     }
 
-
     if (dns.header.an_count > 0) {
         printf("\n[Answer Section]\n");
         for (int i = 0; i < dns.header.an_count; i++) {
-            const char *record_type; 
-            switch (dns.answers[i].type) {
-            case 1:
-                record_type = "A";
-                break;
-            case 28:
-                record_type = "AAAA";
-                break;
-            case 5:
-                record_type = "CNAME";
-                break;
-            case 2:
-                record_type = "NS";
-                break;
-            case 6:
-                record_type = "SOA";
-                break;
-            case 15:
-                record_type = "MX";
-                break;
-            case 33: 
-                record_type = "SRV";
-                break;
-            default:
-                record_type = "UNKNOWN";
-                break;
-        }   
-            if(strcmp(record_type, "SOA") == 0) {
-                printf("%s %d %s SOA %s %s %u %u %u %u %u\n",
-                    dns.answers[i].name,
-                    dns.answers[i].ttl,
-                    class_to_string(dns.answers[i].a_class),
-                    dns.answers[i].mname,
-                    dns.answers[i].rname,
-                    dns.answers[i].serial_number,
-                    dns.answers[i].refresh_interval,
-                    dns.answers[i].retry_interval,
-                    dns.answers[i].expire_limit,
-                    dns.answers[i].minimum_ttl);
-            } else if(strcmp(record_type, "MX") == 0) {
-                    printf("%s %d %s MX %d %s\n",
-                    dns.answers[i].name,
-                    dns.answers[i].ttl,
-                    class_to_string(dns.answers[i].a_class),
-                    dns.answers[i].preference, 
-                    dns.answers[i].rdata); 
-
-            } else if (strcmp(record_type, "SRV") == 0) { 
-                printf("%s %d %s SRV %u %u %u %s\n",
-                dns.answers[i].name,
-                dns.answers[i].ttl,
-                class_to_string(dns.answers[i].a_class),
-                dns.answers[i].priority,
-                dns.answers[i].weight,
-                dns.answers[i].port,
-                dns.answers[i].target); 
-            } else if (strcmp(record_type, "UNKNOWN") == 0) { 
-                printf("UNKNOWN TYPE\n");
-            }  else {
-                printf("%s %d %s %s %s\n", dns.answers[i].name, dns.answers[i].ttl, class_to_string(dns.answers[i].a_class), record_type, dns.answers[i].rdata);
-            }
+            print_resource_record(&dns.answers[i]);
         }
-    } 
+    }
 
     if (dns.header.ns_count > 0) {
         printf("\n[Authority Section]\n");
         for (int i = 0; i < dns.header.ns_count; i++) {
-             const char *record_type; 
-            switch (dns.authorities[i].type) {
-                case 1:
-                    record_type = "A";
-                    break;
-                case 28:
-                    record_type = "AAAA";
-                    break;
-                case 5:
-                    record_type = "CNAME";
-                    break;
-                case 2:
-                    record_type = "NS";
-                    break;
-                case 6:
-                    record_type = "SOA";
-                    break;
-                case 15:
-                    record_type = "MX";
-                    break;
-                case 33: 
-                    record_type = "SRV";
-                    break;
-                default:
-                    record_type = "UNKNOWN";
-                    break;
-
-            }
-            if(strcmp(record_type, "SOA") == 0) {
-                printf("%s %d %s SOA %s %s %u %u %u %u %u\n",
-                    dns.authorities[i].name,
-                    dns.authorities[i].ttl,
-                    class_to_string(dns.authorities[i].a_class),
-                    dns.authorities[i].mname,
-                    dns.authorities[i].rname,
-                    dns.authorities[i].serial_number,
-                    dns.authorities[i].refresh_interval,
-                    dns.authorities[i].retry_interval,
-                    dns.authorities[i].expire_limit,
-                    dns.authorities[i].minimum_ttl);
-            } else if(strcmp(record_type, "MX") == 0) {
-                    printf("%s %d %s MX %d %s\n",
-                    dns.authorities[i].name,
-                    dns.authorities[i].ttl,
-                    class_to_string(dns.authorities[i].a_class),
-                    dns.authorities[i].preference, 
-                    dns.authorities[i].rdata); 
-            } else if (strcmp(record_type, "SRV") == 0) { 
-                printf("%s %d %s SRV %u %u %u %s\n",
-                dns.answers[i].name,
-                dns.answers[i].ttl,
-                class_to_string(dns.answers[i].a_class),
-                dns.answers[i].priority,
-                dns.answers[i].weight,
-                dns.answers[i].port,
-                dns.answers[i].target); 
-            } else if (strcmp(record_type, "UNKNOWN") == 0) { 
-                printf("UNKNOWN TYPE\n");
-            } else {
-                printf("%s %d %s %s %s\n", dns.authorities[i].name, dns.authorities[i].ttl, class_to_string(dns.authorities[i].a_class), record_type, dns.authorities[i].rdata);
-            }
+            print_resource_record(&dns.authorities[i]);
         }
     }
 
     if (dns.header.ar_count > 0) {
         printf("\n[Additional Section]\n");
         for (int i = 0; i < dns.header.ar_count; i++) {
-            const char *record_type; 
-            switch (dns.additionals[i].type) {
-            case 1:
-                record_type = "A";
-                break;
-            case 28:
-                record_type = "AAAA";
-                break;
-            case 5:
-                record_type = "CNAME";
-                break;
-            case 2:
-                record_type = "NS";
-                break;
-            case 6:
-                record_type = "SOA";
-                break;
-            case 15:
-                record_type = "MX";
-                break;
-            case 33: 
-                record_type = "SRV";
-                break;
-            default:
-                record_type = "UNKNOWN";
-                break;
-        }
-
-        if (strcmp(record_type, "SOA") == 0) {
-                    printf("%s %d %s SOA %s %s %u %u %u %u %u\n",
-                    dns.additionals[i].name,
-                    dns.additionals[i].ttl,
-                    class_to_string(dns.additionals[i].a_class),
-                    dns.additionals[i].mname,
-                    dns.additionals[i].rname,
-                    dns.additionals[i].serial_number,
-                    dns.additionals[i].refresh_interval,
-                    dns.additionals[i].retry_interval,
-                    dns.additionals[i].expire_limit,
-                    dns.additionals[i].minimum_ttl);
-        } else if (strcmp(record_type, "MX") == 0) {
-                    printf("%s %d %s MX %d %s\n",
-                    dns.additionals[i].name,
-                    dns.additionals[i].ttl,
-                    class_to_string(dns.additionals[i].a_class),
-                    dns.additionals[i].preference, 
-                    dns.additionals[i].rdata); 
-        } else if (strcmp(record_type, "SRV") == 0) { 
-                printf("%s %d %s SRV %u %u %u %s\n",
-                dns.additionals[i].name,
-                dns.additionals[i].ttl,
-                class_to_string(dns.additionals[i].a_class),
-                dns.additionals[i].priority,
-                dns.additionals[i].weight,
-                dns.additionals[i].port,
-                dns.additionals[i].target); 
-       } else if (strcmp(record_type, "UNKNOWN") == 0) { 
-                printf("UNKNOWN TYPE\n");
-            } else {
-                printf("%s %d %s %s %s\n", dns.additionals[i].name, dns.additionals[i].ttl, class_to_string(dns.additionals[i].a_class), record_type, dns.additionals[i].rdata);
-            }
+            print_resource_record(&dns.additionals[i]);
         }
     }
 
@@ -715,6 +762,7 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
 
     printf("====================\n");
     printf("\n");
+    free_dns_packet(&dns);
 
 }
 
@@ -789,6 +837,7 @@ pcap_t *setup_filter(pcap_t *handle, char *filter_exp, bpf_u_int32 net) {
         return NULL;
     }
 
+    pcap_freecode(&fp);
     return handle;
 }
 
@@ -864,6 +913,7 @@ void start_packet_capture(Arguments *arguments) {
             return;
         }
     }
+
 
     if(arguments->domain_file) {
         write_domains_to_file(hash_table_domain, arguments->domain_file); 

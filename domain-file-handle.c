@@ -94,7 +94,7 @@ bool write_domains_to_file(Hash_Domain_Table *hash_table, const char *file_name)
         return false;
     }
 
-    FILE *file = fopen(file_name, "a");
+    FILE *file = fopen(file_name, "w");
     if (file == NULL) {
         fprintf(stderr, "Debug print: Either hash table NULL or domain name NULL\n");
         return false;

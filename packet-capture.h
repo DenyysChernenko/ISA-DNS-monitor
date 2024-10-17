@@ -229,8 +229,70 @@ void insert_if_valid(Hash_Domain_Table* hash_table, const char* domain_name);
  */
 void insert_if_valid_domain_ip(Hash_Domain_Table* hash_table, const char* domain_name, const char* ip_address);
 
-
+/**
+ * @brief Cleans up allocated resources and exits the program
+ * 
+ * This function frees the memory associated with the hash tables used
+ * in the program
+ * 
+ * @param hash_table_domain A pointer to the hash table containing domain names
+ * @param hash_table_domain_ip_combined A pointer to the hash table containing domain names and IP addresses
+ */
 void cleanup_and_exit(Hash_Domain_Table *hash_table_domain, Hash_Domain_Table *hash_table_domain_ip_combined);
+
+
+/**
+ * @brief Handles incoming signals for termination
+ * 
+ * This function is invoked when a signal, such as SIGINT, is received
+ * 
+ * @param signum The signal number received (e.g., SIGINT, SIGTERM).
+ */
 void handle_signal(int signum);
+
+
+/**
+ * @brief Prints the details of a DNS resource record
+ *
+ * This function takes a pointer to a resource_record structure and prints its details
+ * The output format varies based on the type of the resource
+ * record. If the record type is unknown, it prints "UNKNOWN TYPE"
+ *
+ * @param record A pointer to the resource_record structure containing the DNS record details
+ *             
+ */
+void print_resource_record(const resource_record* record);
+
+/**
+ * @brief Support function to correct handling DNS record type
+ *
+ * Takes type as unsigned 16-bit integer and converts it to a string represnting record type
+ *
+ * @param type A 16-bit unsigned integer representing the DNS record type
+ *             Valid values include:
+ *             - 1  : A 
+ *             - 28 : AAAA 
+ *             - 5  : CNAME 
+ *             - 2  : NS 
+ *             - 6  : SOA 
+ *             - 15 : MX 
+ *             - 33 : SRV 
+ * 
+ * @return A pointer to a string representing the DNS record type
+ */
+const char* get_record_type(uint16_t type);
+
+
+/**
+ * @brief Frees memory allocated for a DNS packet
+ *
+ * This function takes a pointer to a dns_packet structure and frees all dynamically allocated
+ * memory associated with it, including memory for questions, answers, authority records, and
+ * additional records
+ * 
+ * @param dns a dns_packet structure to be freed. If the pointer is NULL, the function
+ *            does nothing
+ */
+void free_dns_packet(dns_packet *dns);
 
 #endif
