@@ -177,7 +177,7 @@ void print_resource_record(const resource_record* record) {
                record->ttl,
                class_to_string(record->a_class),
                record->preference,
-               record->rdata);
+               record->mail_exchange);
     } else if (strcmp(record_type, "SRV") == 0) {
         printf("%s %d %s SRV %u %u %u %s\n",
                record->name,
@@ -202,6 +202,7 @@ void print_resource_record(const resource_record* record) {
 
 void insert_if_valid(Hash_Domain_Table* hash_table, const char* domain_name) {
     if (strlen(domain_name) > 0 && hash_table != NULL) {
+
         char modified_domain_name[256];
         strncpy(modified_domain_name, domain_name, sizeof(modified_domain_name) - 1);
         modified_domain_name[sizeof(modified_domain_name) - 1] = '\0'; 
@@ -210,7 +211,6 @@ void insert_if_valid(Hash_Domain_Table* hash_table, const char* domain_name) {
         if (len > 0 && modified_domain_name[len - 1] == '.') {
             modified_domain_name[len - 1] = '\0'; 
         }
-
         insert_domain_into_hashtable(hash_table_domain, modified_domain_name);
     }
 }
@@ -443,11 +443,10 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
             int mname_length = 0;
             parse_dns_name(reader, packet, records[i].mname, &mname_length);
             insert_if_valid(hash_table_domain, records[i].mname);
-            // printf("parsed domain name: %s\n", records[i].mname);
             int rname_length = 0;
             parse_dns_name(reader, packet, records[i].rname, &rname_length);
             insert_if_valid(hash_table_domain, records[i].rname);
-            // printf("parsed domain name: %s\n", records[i].rname);
+
            
 
             records[i].serial_number = ntohl(*(uint32_t *)(*reader));
@@ -461,14 +460,22 @@ void support_resource_record_parser(const u_char **reader, resource_record *reco
             records[i].minimum_ttl = ntohl(*(uint32_t *)(*reader));
             *reader += 4;
         } else if(records[i].type == 15) {
+
             records[i].preference = ntohs(*(uint16_t *)(*reader)); 
             *reader += 2;
             
-            records[i].rdata = (char *)malloc(records[i].rdlength + 1);
+            // records[i].rdata = (char *)malloc(records[i].rdlength + 1);
+            records[i].mail_exchange = (char *)malloc(256);
+
+            if(records[i].mail_exchange == NULL) {
+                fprintf(stderr, "Failed to allocate memory for record data\n");
+                exit(EXIT_FAILURE);
+            }
+
             int mail_exchange_length = 0;
-            parse_dns_name(reader, packet, records[i].rdata, &mail_exchange_length); 
-            insert_if_valid(hash_table_domain, records[i].rdata);
-            records[i].rdata[records[i].rdlength] = '\0';  
+            parse_dns_name(reader, packet, records[i].mail_exchange, &mail_exchange_length); 
+            records[i].mail_exchange[records[i].rdlength] = '\0';  
+            insert_if_valid(hash_table_domain, records[i].mail_exchange);
 
         } else if (records[i].type == 33) {
             records[i].priority = ntohs(*(uint16_t *)(*reader)); 
@@ -801,37 +808,45 @@ void verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr,
 
 
 void non_verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr, const u_char *packet) {
-   struct ip *ip_header;
-   dns_packet dns;
+    char time_str[64];
+    struct tm *ltime;
+    time_t local_tv_sec = pkthdr->ts.tv_sec;
+    ltime = localtime(&local_tv_sec);
+    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", ltime);
 
+    struct ip *ip_header;
+    struct ip6_hdr *ipv6_header;
+    const struct udphdr *udp_header;
+    dns_packet dns;
 
-   // Take IP Header - 14 bytes after Ethernet header
-   ip_header = (struct ip *)(packet + 14);
+    char src_ip[INET6_ADDRSTRLEN]; 
+    char dst_ip[INET6_ADDRSTRLEN]; 
 
-    // If ip protocol is not UDP -> skip (Protocol: UDP(17))
-    if (ip_header->ip_p != IPPROTO_UDP) {
-        return; 
+    uint16_t ethertype = ntohs(*(uint16_t *)(packet + 12));
+
+   if (ethertype == 0x0800) { 
+        ip_header = (struct ip *)(packet + 14); 
+
+        inet_ntop(AF_INET, &(ip_header->ip_src), src_ip, INET_ADDRSTRLEN);
+        inet_ntop(AF_INET, &(ip_header->ip_dst), dst_ip, INET_ADDRSTRLEN);
+
+        udp_header = (struct udphdr *)(packet + 14 + ip_header->ip_hl * 4); 
+    } else if (ethertype == 0x86dd) { // IPv6
+        ipv6_header = (struct ip6_hdr *)(packet + 14);
+
+        inet_ntop(AF_INET6, &(ipv6_header->ip6_src), src_ip, INET6_ADDRSTRLEN);
+        inet_ntop(AF_INET6, &(ipv6_header->ip6_dst), dst_ip, INET6_ADDRSTRLEN);
+
+        udp_header = (struct udphdr *)(packet + 14 + sizeof(struct ip6_hdr)); 
+    
+    } else {
+        printf("Ethertype: 0x%04x\n", ethertype);
+        printf("Unsupported packet type\n");
+        return;
     }
+    
 
-   // Take DNS Header, 14 (length of Ethernet header) + IP Header + + UDP headder (fixed size -> 8 bytes) 
-
-   support_dns_packet_parser(packet, &dns);
-
-   // Prepare timestamp for output
-   char time_str[64];
-   struct tm *ltime;
-   // Get the raw timestamp from packet header
-   time_t local_tv_sec = pkthdr->ts.tv_sec;
-   ltime = localtime(&local_tv_sec);
-   strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", ltime);
-
-   // Prepare for containing src_ip and dst_ip
-   char src_ip[INET_ADDRSTRLEN];
-   char dst_ip[INET_ADDRSTRLEN];
-
-   // Convert ip src and ip dst from binary to string
-   inet_ntop(AF_INET, &(ip_header->ip_src), src_ip, INET_ADDRSTRLEN);
-   inet_ntop(AF_INET, &(ip_header->ip_dst), dst_ip, INET_ADDRSTRLEN);
+    support_dns_packet_parser(packet, &dns);
 
    // Convert from network byte order to host byte order
     uint16_t flags = dns.header.flags;
@@ -842,18 +857,16 @@ void non_verbose_packet_handler(u_char *user_data, const struct pcap_pkthdr *pkt
         qr = 'Q';
     }
 
-    uint16_t q_count = ntohs(dns.header.q_count);
-    uint16_t an_count = ntohs(dns.header.an_count);
-    uint16_t ns_count = ntohs(dns.header.ns_count);
-    uint16_t ar_count = ntohs(dns.header.ar_count);
 
    printf("%s %s -> %s (", time_str, src_ip, dst_ip);
-   printf("%c %d/%d/%d/%d)\n",
+   printf("%c %d/%u/%u/%u)\n",
            qr,          
-           q_count,          
-           an_count,            
-           ns_count,         
-           ar_count);      
+           dns.header.q_count,          
+           dns.header.an_count,            
+           dns.header.ns_count,         
+           dns.header.ar_count);      
+
+    free_dns_packet(&dns);
 }
 
 

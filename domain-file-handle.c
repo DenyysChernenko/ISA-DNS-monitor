@@ -45,20 +45,24 @@ Hash_Domain_Table *create_hash_table() {
 
 bool insert_domain_into_hashtable(Hash_Domain_Table *hash_table, const char *domain_name) {
 
-    if (hash_table == NULL || domain_name == NULL) {
-        fprintf(stderr, "Debug print: Either hash table NULL or domain name NULL\n");
+    if (hash_table == NULL) {
+        fprintf(stderr, "Debug print: Hash table is NULL\n");
+        return false;
+    }
+    if (domain_name == NULL || strlen(domain_name) == 0) {
+        fprintf(stderr, "Debug print: Domain name is NULL or empty\n");
         return false;
     }
 
-
+    if (strlen(domain_name) > MAX_DOMAIN_LENGTH) {
+        fprintf(stderr, "Debug print: Domain name exceeds maximum length of %d\n", MAX_DOMAIN_LENGTH);
+        return false;
+    }
 
     unsigned long index = djb2_hash(domain_name);
-    // Made to be in bounds in hash_table
     unsigned long hash_index = index % hash_table->size;
     Domain_Item *current_item = hash_table->table[hash_index];
 
-
-    // Check for the duplicate domain name
     while (current_item != NULL) {
         if (strcmp(current_item->domain_name, domain_name) == 0) {
             return false; 
@@ -66,26 +70,29 @@ bool insert_domain_into_hashtable(Hash_Domain_Table *hash_table, const char *dom
         current_item = current_item->next;
     }
 
-
     Domain_Item *new_domain_name = malloc(sizeof(Domain_Item));
-    if(new_domain_name == NULL) {
-        fprintf(stderr, "Failed to allocate memory to new domain name strucutre\n");
-        exit(EXIT_FAILURE);
+    if (new_domain_name == NULL) {
+        fprintf(stderr, "Failed to allocate memory for new domain item structure\n");
+        return false; 
     }
 
     new_domain_name->domain_name = malloc(strlen(domain_name) + 1);
-    if(new_domain_name->domain_name == NULL) {
-        fprintf(stderr, "Failed to allocate memory to new domain name strnig\n");
-        free(new_domain_name);
-        exit(EXIT_FAILURE);
-    } 
+    if (new_domain_name->domain_name == NULL) {
+        fprintf(stderr, "Failed to allocate memory for new domain name string\n");
+        free(new_domain_name); 
+        return false; 
+    }
 
+  if (snprintf(new_domain_name->domain_name, strlen(domain_name) + 1, "%s", domain_name) < 0) {
+        fprintf(stderr, "Failed to copy domain name string\n");
+        free(new_domain_name->domain_name); 
+        free(new_domain_name); 
+        return false; 
+    }
 
-    strcpy(new_domain_name->domain_name, domain_name);
     new_domain_name->next = hash_table->table[hash_index];
-    hash_table->table[hash_index] = new_domain_name; 
-
-    return true; 
+    hash_table->table[hash_index] = new_domain_name;
+    return true;
 }
 
 bool write_domains_to_file(Hash_Domain_Table *hash_table, const char *file_name) {
